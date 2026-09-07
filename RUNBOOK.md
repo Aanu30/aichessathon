@@ -99,17 +99,42 @@ Worth knowing because it is the failure mode the rules punish hardest — an
 illegal move is an instant loss — and it only appears under time pressure,
 which is exactly when local testing at generous time controls will not find it.
 
-## 5. Honest assessment
+## 5. Verified against the official harness
 
-Current state: beats a random opponent 40/40 and a depth-3 piece-square
-baseline 12/12, with no illegal moves, no crashes, and no flags across ~60
-games. That is a real entry and should land comfortably inside the top 50.
+The competition's own harness (`advitrocks9/aichessathon-starter`) was cloned
+and run under Python 3.12.14 with python-chess 1.11.2 — the exact platform
+stack, installed with uv — over the eight real curated opening positions.
 
-It is probably **not** enough to win. The ceiling is node throughput, and
-python-chess sets that ceiling. The teams that beat this will have written
-their own bitboard move generator and jitted it with numba, which the platform
-preinstalls for exactly this reason. That is worth roughly 50–100x the nodes,
-which is about five extra plies of depth.
+| Test | Result |
+|---|---|
+| `make arena` vs `baselines/greedy` | +16 =0 -0, every game by checkmate |
+| `make arena` vs `baselines/minimax` | +16 =0 -0, every game by checkmate |
+| `make zip` (official packager and smoke) | passes; 11,893 bytes, 44,052 unzipped, `agent.py` alone at the root |
+| `ruff check` with their rule set | clean |
+| `mypy --strict` | clean |
+
+Their ruff config is stricter than the default (E, F, I, N, UP, B, SIM, RUF at
+line length 100). It flagged 70 issues, all style: pre-3.12 type annotation
+syntax, and the nested clock check. Both fixed. Merging the clock check into
+one condition costs nothing because `and` short-circuits, so `time.monotonic`
+is still only called once every 1024 nodes.
+
+The starter repo lives at `/tmp/starter` on this machine, with a working
+Python 3.12 virtualenv at `/tmp/starter/.venv`. `/tmp` is cleared on reboot,
+so fork the repo properly if you want to keep iterating with it.
+
+## 5b. Honest assessment
+
+Beating both shipped baselines 16-0 means the agent is a real entry and should
+land comfortably inside the top 50. It does not mean it will win: the
+baselines are meant to be beaten, and the field is other people's real
+attempts, not `baselines/greedy`.
+
+The ceiling is node throughput, and python-chess sets that ceiling at roughly
+25,000 nodes per second. The teams that beat this will have written their own
+bitboard move generator and jitted it with numba, which the platform
+preinstalls for exactly this reason. That is worth roughly 50-100x the nodes,
+which is about five extra plies.
 
 That is the v2 decision, and it is a real one: a numba rewrite is a big job
 with a lot of debugging, and a half-finished one that crashes scores zero
@@ -127,8 +152,9 @@ Cheaper improvements, in rough order of value per hour:
 4. The numba move generator.
 
 Two games tell you nothing. A change worth 3% needs hundreds of games before
-the interval shrinks past it — `arena.py` prints that interval so you can see
-when a result is real rather than guessing.
+the interval shrinks past it. Note also that the eight openings are a sample,
+not the published set, so anything tuned hard on them is tuned on eight
+positions.
 
 ## 6. Separately: the Daily Five
 

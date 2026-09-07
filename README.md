@@ -61,13 +61,26 @@ still returns a legal move with 5 ms left.
 
 ## Results
 
-Against local baselines, alternating colours from fixed openings:
+Verified with the competition's own harness from
+[`advitrocks9/aichessathon-starter`](https://github.com/advitrocks9/aichessathon-starter),
+running Python 3.12.14 and python-chess 1.11.2 — the exact platform stack —
+over the eight curated opening positions, each played once with each colour.
 
-- 40/40 against a random mover
-- 12/12 against a depth-3 alpha-beta with piece-square tables
+| Test | Result |
+|---|---|
+| `harness.arena` vs `baselines/greedy`, 16 games at 10s+0.1s | **+16 =0 -0**, every game by checkmate |
+| `harness.arena` vs `baselines/minimax`, 16 games at 10s+0.1s | **+16 =0 -0**, every game by checkmate |
+| `harness.package` | 11,893 byte zip, 44,052 unzipped, `agent.py` alone at the root, both smoke games pass |
+| `ruff check` with the starter's rule set (E,F,I,N,UP,B,SIM,RUF) | clean |
+| `mypy --strict` | clean |
 
-Zero illegal moves, zero crashes, zero flag falls across roughly 60 games.
-Reaches depth 8–12 in five seconds depending on position.
+Additionally, against local baselines: 40/40 against a random mover and 12/12
+against a depth-3 alpha-beta with piece-square tables. Zero illegal moves,
+zero crashes and zero flag falls across roughly 90 games. Worst case time
+usage measured at 21% of the remaining clock on a single move.
+
+Reaches depth 8-12 in five seconds depending on position, at roughly 25,000
+nodes per second.
 
 ## Files
 
