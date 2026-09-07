@@ -1017,10 +1017,11 @@ class Searcher:
                 best_move = self.root_best
 
             elapsed = time.monotonic() - start
-            print(
-                f"depth {depth} seldepth {self.seldepth} score {score} "
-                f"nodes {self.nodes} time {elapsed:.2f}s pv {best_move.uci()}"
-            )
+            if not _QUIET:
+                print(
+                    f"depth {depth} seldepth {self.seldepth} score {score} "
+                    f"nodes {self.nodes} time {elapsed:.2f}s pv {best_move.uci()}"
+                )
             if abs(score) > MATE_THRESHOLD:
                 break
             # If the next iteration plainly cannot finish, stop now and keep
@@ -1035,7 +1036,10 @@ class Searcher:
 # --------------------------------------------------------------------------
 
 _SEARCHER = Searcher()
-_LAST_FULLMOVE = -1
+
+# Set while the warm-up search runs at import so it does not fill the first
+# 4 KB of the log the platform keeps, which is where the init timings go.
+_QUIET = False
 
 # Wall-clock overhead reserved for serialising the move and the runner's own
 # bookkeeping. The referee is unforgiving, so this is deliberately generous.
@@ -1070,15 +1074,15 @@ def _budget_seconds(board: chess.Board, time_left_ms: int) -> float:
 
 def get_move(fen: str, time_left_ms: int) -> str:
     """Competition entry point. Returns a legal UCI move for `fen`."""
-    global _LAST_FULLMOVE
     board = chess.Board(fen)
 
     try:
         # Track the positions we have been asked about so the search knows
-        # which repetitions are already on the board.
+        # which repetitions are already on the board. Counting starts at the
+        # first FEN of the game, which is where the referee counts from too:
+        # rated games begin from a curated opening, not the standard start.
         key = board._transposition_key()
         _SEARCHER.game_keys[key] = _SEARCHER.game_keys.get(key, 0) + 1
-        _LAST_FULLMOVE = board.fullmove_number
 
         budget = _budget_seconds(board, time_left_ms)
         move = _SEARCHER.search(board, budget)
@@ -1108,13 +1112,21 @@ def get_move(fen: str, time_left_ms: int) -> str:
 
 
 def _warm_up() -> None:
-    """Touch the hot paths once during the 90s init budget."""
-    board = chess.Board()
-    searcher = Searcher()
+    """Touch the hot paths once during the 90s init budget.
+
+    Anything deferred to the first `get_move` comes out of the match clock
+    instead, so the piece-square tables, the evaluation and the search are all
+    exercised here on a throwaway searcher.
+    """
+    global _QUIET
+    _QUIET = True
     try:
-        searcher.search(board, 0.35)
+        Searcher().search(chess.Board(), 0.35)
     except Exception:  # pragma: no cover - warm-up must never break import
         pass
+    finally:
+        _QUIET = False
 
 
 _warm_up()
+print("agent ready")
