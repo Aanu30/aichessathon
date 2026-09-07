@@ -27,8 +27,7 @@ The piece-square tables are the well-known public PeSTO tuning constants.
 from __future__ import annotations
 
 import time
-from collections.abc import Hashable
-from typing import Callable, Dict, List, Optional, Tuple
+from collections.abc import Callable, Hashable
 
 import chess
 
@@ -37,17 +36,17 @@ import chess
 # --------------------------------------------------------------------------
 
 # Indexed by chess.PAWN..chess.KING (1..6); index 0 is unused padding.
-MG_PIECE: Tuple[int, ...] = (0, 82, 337, 365, 477, 1025, 0)
-EG_PIECE: Tuple[int, ...] = (0, 94, 281, 297, 512, 936, 0)
+MG_PIECE: tuple[int, ...] = (0, 82, 337, 365, 477, 1025, 0)
+EG_PIECE: tuple[int, ...] = (0, 94, 281, 297, 512, 936, 0)
 
 # Game-phase weight contributed by each piece type. Total for a full board
 # is 24, which is what a tapered evaluation interpolates over.
-PHASE_WEIGHT: Tuple[int, ...] = (0, 0, 1, 1, 2, 4, 0)
+PHASE_WEIGHT: tuple[int, ...] = (0, 0, 1, 1, 2, 4, 0)
 TOTAL_PHASE = 24
 
 # Piece values used by the static exchange evaluation. Flat, not tapered:
 # SEE only needs a consistent ordering of the exchange.
-SEE_VALUE: Tuple[int, ...] = (0, 100, 320, 330, 500, 900, 20000)
+SEE_VALUE: tuple[int, ...] = (0, 100, 320, 330, 500, 900, 20000)
 
 # Piece-square tables. Row 0 is rank 8 (a8..h8), so a white piece on square
 # `sq` reads index `sq ^ 56` and a black piece reads index `sq`.
@@ -172,22 +171,22 @@ EG_KING = (
     -53, -34, -21, -11, -28, -14, -24, -43,
 )
 
-MG_TABLES: Tuple[Tuple[int, ...], ...] = (
+MG_TABLES: tuple[tuple[int, ...], ...] = (
     (), MG_PAWN, MG_KNIGHT, MG_BISHOP, MG_ROOK, MG_QUEEN, MG_KING,
 )
-EG_TABLES: Tuple[Tuple[int, ...], ...] = (
+EG_TABLES: tuple[tuple[int, ...], ...] = (
     (), EG_PAWN, EG_KNIGHT, EG_BISHOP, EG_ROOK, EG_QUEEN, EG_KING,
 )
 
 
-def _build_pst() -> Tuple[List[List[int]], List[List[int]]]:
+def _build_pst() -> tuple[list[list[int]], list[list[int]]]:
     """Flatten the tables into [piece_type][square] lookups for each colour.
 
     Index as ``MG[colour][piece_type][square]``. Precomputing the mirror here
     keeps the hot path down to one list index instead of a conditional XOR.
     """
-    mg: List[List[List[int]]] = [[[0] * 64 for _ in range(7)] for _ in range(2)]
-    eg: List[List[List[int]]] = [[[0] * 64 for _ in range(7)] for _ in range(2)]
+    mg: list[list[list[int]]] = [[[0] * 64 for _ in range(7)] for _ in range(2)]
+    eg: list[list[list[int]]] = [[[0] * 64 for _ in range(7)] for _ in range(2)]
     for piece_type in range(1, 7):
         for square in range(64):
             mg[chess.WHITE][piece_type][square] = (
@@ -211,20 +210,20 @@ def _build_pst() -> Tuple[List[List[int]], List[List[int]]]:
 
 _MG_FLAT, _EG_FLAT = _build_pst()
 # _MG[colour * 7 + piece_type][square]
-MG_PST: List[List[int]] = _MG_FLAT
-EG_PST: List[List[int]] = _EG_FLAT
+MG_PST: list[list[int]] = _MG_FLAT
+EG_PST: list[list[int]] = _EG_FLAT
 
 # Bitboard masks used by the pawn-structure and king-safety terms.
-FILE_MASKS: Tuple[int, ...] = tuple(chess.BB_FILES)
-ADJACENT_FILES: Tuple[int, ...] = tuple(
+FILE_MASKS: tuple[int, ...] = tuple(chess.BB_FILES)
+ADJACENT_FILES: tuple[int, ...] = tuple(
     (chess.BB_FILES[f - 1] if f > 0 else 0) | (chess.BB_FILES[f + 1] if f < 7 else 0)
     for f in range(8)
 )
 
 
-def _passed_masks(colour: chess.Color) -> Tuple[int, ...]:
+def _passed_masks(colour: chess.Color) -> tuple[int, ...]:
     """Squares that must be free of enemy pawns for a pawn here to be passed."""
-    masks: List[int] = []
+    masks: list[int] = []
     for square in range(64):
         file_index = chess.square_file(square)
         rank_index = chess.square_rank(square)
@@ -236,18 +235,18 @@ def _passed_masks(colour: chess.Color) -> Tuple[int, ...]:
     return tuple(masks)
 
 
-PASSED_MASK: Tuple[Tuple[int, ...], Tuple[int, ...]] = (
+PASSED_MASK: tuple[tuple[int, ...], tuple[int, ...]] = (
     _passed_masks(chess.BLACK),  # index 0 == chess.BLACK
     _passed_masks(chess.WHITE),
 )
 
-KING_ZONE: Tuple[int, ...] = tuple(
+KING_ZONE: tuple[int, ...] = tuple(
     chess.BB_KING_ATTACKS[square] | chess.BB_SQUARES[square] for square in range(64)
 )
 
 # Bonus for a passed pawn by the rank it has reached, from its own side's view.
-PASSED_BONUS_MG: Tuple[int, ...] = (0, 5, 10, 20, 35, 60, 100, 0)
-PASSED_BONUS_EG: Tuple[int, ...] = (0, 10, 20, 40, 70, 120, 180, 0)
+PASSED_BONUS_MG: tuple[int, ...] = (0, 5, 10, 20, 35, 60, 100, 0)
+PASSED_BONUS_EG: tuple[int, ...] = (0, 10, 20, 40, 70, 120, 180, 0)
 
 BISHOP_PAIR_MG = 22
 BISHOP_PAIR_EG = 45
@@ -312,26 +311,26 @@ class Searcher:
     """Holds everything that survives between moves in a single game."""
 
     def __init__(self) -> None:
-        self.tt: Dict[Hashable, Tuple[int, int, int, Optional[chess.Move]]] = {}
-        self.killers: List[List[Optional[chess.Move]]] = [
+        self.tt: dict[Hashable, tuple[int, int, int, chess.Move | None]] = {}
+        self.killers: list[list[chess.Move | None]] = [
             [None, None] for _ in range(MAX_PLY)
         ]
-        self.history: List[List[int]] = [[0] * 64 for _ in range(14)]
-        self.counter_moves: Dict[Tuple[int, int], chess.Move] = {}
+        self.history: list[list[int]] = [[0] * 64 for _ in range(14)]
+        self.counter_moves: dict[tuple[int, int], chess.Move] = {}
         # Pawn structure depends only on the two pawn bitboards, which change
         # rarely, so caching it turns the most expensive part of the leaf
         # evaluation into a dictionary lookup almost every time.
-        self.pawn_cache: Dict[Tuple[int, int], Tuple[int, int]] = {}
-        self.game_keys: Dict[Hashable, int] = {}
-        self.path_keys: List[Hashable] = []
-        self.mg_stack: List[Tuple[int, int, int]] = []
+        self.pawn_cache: dict[tuple[int, int], tuple[int, int]] = {}
+        self.game_keys: dict[Hashable, int] = {}
+        self.path_keys: list[Hashable] = []
+        self.mg_stack: list[tuple[int, int, int]] = []
         self.mg = 0
         self.eg = 0
         self.phase = 0
         self.nodes = 0
         self.deadline = 0.0
         self.stop = False
-        self.root_best: Optional[chess.Move] = None
+        self.root_best: chess.Move | None = None
         self.seldepth = 0
 
     # -- incremental evaluation state --------------------------------------
@@ -435,7 +434,7 @@ class Searcher:
 
     # -- evaluation --------------------------------------------------------
 
-    def pawn_structure(self, white_pawns: int, black_pawns: int) -> Tuple[int, int]:
+    def pawn_structure(self, white_pawns: int, black_pawns: int) -> tuple[int, int]:
         """Doubled, isolated and passed pawn terms, cached on the pawn skeleton."""
         cache_key = (white_pawns, black_pawns)
         cached = self.pawn_cache.get(cache_key)
@@ -610,11 +609,11 @@ class Searcher:
     def order_moves(
         self,
         board: chess.Board,
-        moves: List[chess.Move],
-        tt_move: Optional[chess.Move],
+        moves: list[chess.Move],
+        tt_move: chess.Move | None,
         ply: int,
-        previous: Optional[chess.Move],
-    ) -> List[chess.Move]:
+        previous: chess.Move | None,
+    ) -> list[chess.Move]:
         killer_one, killer_two = self.killers[ply]
         counter = None
         if previous is not None:
@@ -624,7 +623,7 @@ class Searcher:
         history = self.history
         turn = board.turn
         ep_square = board.ep_square
-        scored: List[Tuple[int, chess.Move]] = []
+        scored: list[tuple[int, chess.Move]] = []
         append = scored.append
         for move in moves:
             if move == tt_move:
@@ -643,9 +642,7 @@ class Searcher:
                 victim_value = SEE_VALUE[victim] if victim is not None else 0
                 if move.promotion:
                     victim_value += SEE_VALUE[move.promotion] - SEE_VALUE[chess.PAWN]
-                if victim_value >= SEE_VALUE[attacker]:
-                    append(((1 << 22) + victim_value * 8 - attacker, move))
-                elif self.see(board, move) >= 0:
+                if victim_value >= SEE_VALUE[attacker] or self.see(board, move) >= 0:
                     append(((1 << 22) + victim_value * 8 - attacker, move))
                 else:
                     append((-(1 << 22) + victim_value, move))
@@ -680,9 +677,10 @@ class Searcher:
         self, board: chess.Board, alpha: int, beta: int, ply: int
     ) -> int:
         self.nodes += 1
-        if not self.nodes & 1023:
-            if time.monotonic() >= self.deadline:
-                raise TimeUp
+        # `and` short-circuits, so the clock is still only read once every
+        # 1024 nodes.
+        if not self.nodes & 1023 and time.monotonic() >= self.deadline:
+            raise TimeUp
         if ply > self.seldepth:
             self.seldepth = ply
         if ply >= MAX_PLY - 1:
@@ -740,12 +738,13 @@ class Searcher:
         beta: int,
         ply: int,
         can_null: bool,
-        previous: Optional[chess.Move],
+        previous: chess.Move | None,
     ) -> int:
         self.nodes += 1
-        if not self.nodes & 1023:
-            if time.monotonic() >= self.deadline:
-                raise TimeUp
+        # `and` short-circuits, so the clock is still only read once every
+        # 1024 nodes.
+        if not self.nodes & 1023 and time.monotonic() >= self.deadline:
+            raise TimeUp
 
         is_root = ply == 0
         is_pv = beta - alpha > 1
@@ -761,7 +760,7 @@ class Searcher:
             if alpha >= beta:
                 return alpha
 
-        tt_move: Optional[chess.Move] = None
+        tt_move: chess.Move | None = None
         entry = self.tt.get(key)
         if entry is not None:
             entry_depth: int = entry[0]
@@ -849,7 +848,7 @@ class Searcher:
         ordered = self.order_moves(board, moves, tt_move, ply, previous)
 
         best_score = -INFINITY
-        best_move: Optional[chess.Move] = None
+        best_move: chess.Move | None = None
         original_alpha = alpha
         self.path_keys.append(key)
         history = self.history
