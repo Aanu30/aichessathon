@@ -28,7 +28,7 @@ from __future__ import annotations
 
 import time
 from collections.abc import Hashable
-from typing import Dict, List, Optional, Tuple
+from typing import Callable, Dict, List, Optional, Tuple
 
 import chess
 
@@ -278,6 +278,30 @@ FUTILITY_MARGIN = 110
 DELTA_MARGIN = 975
 ASPIRATION_DELTA = 30
 MAX_TT_ENTRIES = 900_000
+
+
+def _make_position_key() -> Callable[[chess.Board], Hashable]:
+    """Pick a way to identify a position for the transposition table.
+
+    ``Board._transposition_key`` is private API. It exists in python-chess
+    1.11.2, which is the version the platform pins, and it is by far the
+    cheapest option. The Zobrist fallback exists so that a version change
+    degrades performance instead of crashing on every node.
+    """
+    if hasattr(chess.Board, "_transposition_key"):
+        return chess.Board._transposition_key
+
+    # Bound under an alias: a plain ``import chess.polyglot`` here would make
+    # `chess` a local name for this whole function and break the line above.
+    import chess.polyglot as polyglot
+
+    def zobrist(board: chess.Board) -> Hashable:
+        return polyglot.zobrist_hash(board)
+
+    return zobrist
+
+
+POSITION_KEY = _make_position_key()
 
 
 class TimeUp(Exception):
@@ -726,7 +750,7 @@ class Searcher:
         is_root = ply == 0
         is_pv = beta - alpha > 1
 
-        key = board._transposition_key()
+        key = POSITION_KEY(board)
         if not is_root and self.is_draw(board, key):
             return 0
 
@@ -1081,7 +1105,7 @@ def get_move(fen: str, time_left_ms: int) -> str:
         # which repetitions are already on the board. Counting starts at the
         # first FEN of the game, which is where the referee counts from too:
         # rated games begin from a curated opening, not the standard start.
-        key = board._transposition_key()
+        key = POSITION_KEY(board)
         _SEARCHER.game_keys[key] = _SEARCHER.game_keys.get(key, 0) + 1
 
         budget = _budget_seconds(board, time_left_ms)
