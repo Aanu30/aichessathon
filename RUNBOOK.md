@@ -156,6 +156,55 @@ the interval shrinks past it. Note also that the eight openings are a sample,
 not the published set, so anything tuned hard on them is tuned on eight
 positions.
 
+## 5c. Experiment log: the coaching report, and what measurement said
+
+A post-match report on rounds 54 and 55 (drawn, then lost) diagnosed
+"passed-pawn blindness" and "evaluation compression". Its symptoms were real:
+the live build plays 5 of its 6 named blunders. Several of its claims about
+the internals were not.
+
+Checked directly against the code:
+
+| Report claimed | Measured |
+|---|---|
+| No passed-pawn term; a 7th-rank pawn scores like a 4th | False. e4 +125, e5 +160, e6 +268, e7 +419 |
+| Eval compressed; would say +80 when a queen up | False. Queen up +928, rook +513, pawn +115 |
+| Add a transposition table, null-move, LMR, aspiration windows, SEE | All five already present |
+| Add rook-on-open-file, doubled/isolated pawns, king shield | All three already present |
+
+Four changes were then built and measured against the live build on the
+official harness, 48 games each, alternating colours over all eight openings:
+
+| Change | Score | Elo | Flags |
+|---|---|---|---|
+| Time allocation only | 49.0% | -7 (-89..+74) | 0 |
+| Contempt (-18 on draws) only | 45.8% | -29 (-116..+55) | 2 |
+| Passed-pawn evaluation only | 45.8% | -29 (-127..+64) | 3 |
+| Steeper passers, zero per-node cost | 42.7% | -51 (-147..+38) | 1 |
+| All combined (16 games) | 43.8% | -44 (-256..+138) | 0 |
+| **CONTROL: the live build vs itself** | **57.3%** | **+51 (-25..+133)** | **1** |
+
+The control is the finding that matters. Two byte-identical copies of the same
+engine scored 57.3% against each other, an apparent gain of 51 Elo. Every
+effect above is smaller than the noise an identical engine produces. Nothing
+here is evidence of anything, in either direction, and nothing was shipped.
+
+Two things were learned that are solid:
+
+1. The richer passed-pawn evaluation cost 35-42% of the node rate and a full
+   ply of depth, three plies in a rook endgame. `board.is_attacked_by` cannot
+   be afforded once per evaluation at 25,000 nodes per second. A better
+   evaluation searched three plies shallower is a worse engine.
+2. The flag losses are not caused by any change. The control flagged too, so
+   the time manager is fragile at a 3-second base. It is not in danger at
+   120s+0.5s, where rounds 54 and 55 ended with 7.8s and 11.5s to spare, but
+   the margin and the every-1024-nodes clock check are tuned for the long
+   clock and nothing else.
+
+The practical lesson for the days that remain: at this sample size only large
+changes are measurable. Tuning evaluation constants is not measurable here, so
+it is not a good use of the time. Spend it on something big enough to see.
+
 ## 6. Separately: the Daily Five
 
 From the rules page and the nav bar on your own dashboard. 6–10 September, one
