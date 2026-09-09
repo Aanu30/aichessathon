@@ -1,215 +1,30 @@
-"""Eagle Fang - a chess engine for AI Chessathon.
+"""Eagle Fang - a classical alpha-beta chess engine for AI Chessathon.
 
-Two engines live in this file's package.
+Design notes
+------------
+The match environment gives one core of a 2.60 GHz EPYC and only python-chess
+for board handling, so raw node throughput is low (tens of thousands of nodes
+per second, not millions). Every design choice below follows from that:
 
-The fast path is a bitboard move generator and search jitted with numba
-(`fastcore.py`, `fastengine.py`), reaching about 1.5 million nodes per second.
-The fallback is the original python-chess engine below, at about 25,000. The
-fast path is four to nine plies deeper for the same clock, so it plays; the
-fallback exists because a numba compile failure at import would otherwise lose
-every game, and a slower engine is infinitely better than no engine.
+* Evaluation is incremental. Material and piece-square scores are updated by
+  the delta of each move rather than recomputed by scanning the board, which
+  would otherwise dominate the cost of a node.
+* Move ordering is the main lever. Alpha-beta only pays off when good moves
+  come first, so we order by transposition-table move, then static exchange
+  evaluation on captures, then killers, counter-moves and a history table.
+* Forward pruning buys depth we cannot afford to search honestly: null-move
+  pruning, reverse futility, futility, late-move reductions and late-move
+  pruning.
+* Quiescence search with delta pruning stops the evaluation being measured
+  halfway through an exchange.
+* The clock is checked inside the search, and iterative deepening means there
+  is always a legal move to hand back when the budget runs out.
 
-Selection happens once, at import, inside the 90 second init budget: the fast
-engine is compiled and then verified against a known perft result. If either
-step fails or the answer is wrong, FAST_READY stays False and the fallback
-plays. Every move the fast path returns is also checked for legality against
-python-chess before it is sent.
+No third-party engine, network, or table of engine moves is used anywhere.
+The piece-square tables are the well-known public PeSTO tuning constants.
 """
 
 from __future__ import annotations
-
-import time as _time
-
-import numpy as _np
-
-import chess as _chess
-
-FAST_READY = False
-_FAST_ERROR = ""
-
-try:
-    _t0 = _time.monotonic()
-    import fastcore as _fc
-    import fastengine as _fe
-
-    _M = _fe.MAX_PLY
-    _moves = _np.zeros((_M, 256), dtype=_np.int64)
-    _scores = _np.zeros((_M, 256), dtype=_np.int64)
-    _undo = _np.zeros((_M, 8), dtype=_np.int64)
-    _killers = _np.full((_M, 2), -1, dtype=_np.int64)
-    _history = _np.zeros((12, 64), dtype=_np.int64)
-    _tt_key = _np.zeros(_fe.TT_SIZE, dtype=_np.uint64)
-    _tt_move = _np.zeros(_fe.TT_SIZE, dtype=_np.int64)
-    _tt_score = _np.zeros(_fe.TT_SIZE, dtype=_np.int64)
-    _tt_depth = _np.zeros(_fe.TT_SIZE, dtype=_np.int64)
-    _tt_flag = _np.zeros(_fe.TT_SIZE, dtype=_np.int64)
-    _hist = _np.zeros(2048, dtype=_np.uint64)
-    _out = _np.zeros(8, dtype=_np.int64)
-
-    _PIECE_INDEX = {
-        _chess.PAWN: 0, _chess.KNIGHT: 1, _chess.BISHOP: 2,
-        _chess.ROOK: 3, _chess.QUEEN: 4, _chess.KING: 5,
-    }
-
-    def _to_bitboards(board: "_chess.Board") -> "tuple[_np.ndarray, _np.ndarray]":
-        """Convert a python-chess board into the jitted engine's arrays."""
-        bb = _np.zeros(8, dtype=_np.uint64)
-        for square in range(64):
-            piece = board.piece_at(square)
-            if piece is None:
-                continue
-            bit = _np.uint64(1) << _np.uint64(square)
-            bb[_PIECE_INDEX[piece.piece_type]] |= bit
-            bb[6 if piece.color == _chess.WHITE else 7] |= bit
-        st = _np.zeros(5, dtype=_np.int64)
-        st[0] = 0 if board.turn == _chess.WHITE else 1
-        rights = 0
-        if board.castling_rights & _chess.BB_H1:
-            rights |= 1
-        if board.castling_rights & _chess.BB_A1:
-            rights |= 2
-        if board.castling_rights & _chess.BB_H8:
-            rights |= 4
-        if board.castling_rights & _chess.BB_A8:
-            rights |= 8
-        st[1] = rights
-        st[2] = board.ep_square if board.ep_square is not None else -1
-        st[3] = board.halfmove_clock
-        return bb, st
-
-    def _to_uci(move: int) -> str:
-        frm = move & 63
-        to = (move >> 6) & 63
-        promo = (move >> 12) & 7
-        text = _chess.square_name(frm) + _chess.square_name(to)
-        if promo:
-            text += "nbrq"[promo - 1]
-        return text
-
-    # Compile now, on the init budget, and in dependency order.
-    #
-    # This ordering is not cosmetic. Calling search_depth first makes numba
-    # compile the entire call graph as one unit, and LLVM's optimiser is
-    # superlinear in function size: that costs 56 seconds. Warming the leaves
-    # first, so each caller finds its callees already compiled, costs 26. The
-    # init budget is 90 seconds on a slower core than this was measured on, so
-    # the difference is the difference between playing and losing on time.
-    _wb, _ws = _to_bitboards(_chess.Board())
-    _zero = _np.uint64(0)
-    _fc.msb(_np.uint64(8))
-    _fc.lsb(_np.uint64(8))
-    _fc.popcount(_np.uint64(8))
-    _fc.ray_attacks(0, _zero, 0)
-    _fc.rook_attacks(0, _zero)
-    _fc.bishop_attacks(0, _zero)
-    _fc.queen_attacks(0, _zero)
-    _fc.piece_at(_wb, 0)
-    _fc.encode(0, 1, 0, 0)
-    _fc.attacked_by(_wb, 0, 0)
-    _count = _fc.generate_moves(_wb, _ws, _moves[0])
-    _first = _moves[0, 0]
-    if _fc.make_move(_wb, _ws, _first, _undo, 0):
-        _fc.unmake_move(_wb, _ws, _first, _undo, 0)
-    _fe.zobrist(_wb, _ws)
-    _fe.evaluate(_wb, _ws)
-    _fe.see_capture(_wb, _ws, _first)
-    _fe.score_moves(_wb, _ws, _moves[0], _scores[0], _count, -1, _killers, _history, 0)
-    _fe.pick_move(_scores[0], _moves[0], _count, 0)
-    _fe.in_check(_wb, _ws)
-    _fe.quiescence(
-        _wb, _ws, -_fe.INF, _fe.INF, 0, _moves, _scores, _undo, _killers, _history, _out
-    )
-    _wb, _ws = _to_bitboards(_chess.Board())
-    _fe.search_depth(
-        _wb, _ws, 3, -_fe.INF, _fe.INF, _moves, _scores, _undo, _killers, _history,
-        _tt_key, _tt_move, _tt_score, _tt_depth, _tt_flag, _hist, 0, 10 ** 9, _out,
-    )
-    _wb, _ws = _to_bitboards(_chess.Board())
-    _nodes = _fc.perft(_wb, _ws, 4, _moves, _undo, 0)
-    if _nodes != 197281:
-        raise RuntimeError(f"perft(4) was {_nodes}, expected 197281")
-
-    _tt_key[:] = 0
-    _tt_depth[:] = 0
-    FAST_READY = True
-    print(f"fast engine ready in {_time.monotonic() - _t0:.1f}s")
-except Exception as _exc:  # pragma: no cover - the fallback must always work
-    _FAST_ERROR = f"{type(_exc).__name__}: {_exc}"
-    print(f"fast engine unavailable ({_FAST_ERROR}); using the python-chess fallback")
-
-
-# Positions we have been asked about, so the search knows what repeating means.
-_GAME_KEYS: "list[int]" = []
-# Nodes per second, measured as we go, to turn a time budget into a node cap.
-_NPS = 700_000.0
-
-
-def _fast_move(fen: str, time_left_ms: int) -> str:
-    """Iterative deepening driven from Python; each depth is one jitted call."""
-    global _NPS
-    board = _chess.Board(fen)
-    bb, st = _to_bitboards(board)
-
-    key = int(_fe.zobrist(bb, st))
-    _GAME_KEYS.append(key)
-    for index, seen in enumerate(_GAME_KEYS[-2047:]):
-        _hist[index] = _np.uint64(seen)
-    hist_len = min(len(_GAME_KEYS), 2047)
-
-    budget = _budget_seconds(board, time_left_ms)
-    deadline = _time.monotonic() + budget
-
-    _killers[:, :] = -1
-    _history[:, :] //= 8  # decay: item assignment, not a name rebind
-
-    best = -1
-    score = 0
-    for depth in range(1, _fe.MAX_PLY - 2):
-        remaining = deadline - _time.monotonic()
-        if remaining <= 0:
-            break
-        # Convert the clock we have left into a node budget the jitted search
-        # can check without reading the clock itself.
-        cap = int(remaining * _NPS)
-        if cap < 4000:
-            cap = 4000
-        _out[:] = 0
-        started = _time.monotonic()
-        _fe.search_depth(
-            bb, st, depth, -_fe.INF, _fe.INF, _moves, _scores, _undo, _killers,
-            _history, _tt_key, _tt_move, _tt_score, _tt_depth, _tt_flag,
-            _hist, hist_len, cap, _out,
-        )
-        elapsed = _time.monotonic() - started
-        if elapsed > 0.02 and _out[2] > 20000:
-            measured = _out[2] / elapsed
-            _NPS = 0.7 * _NPS + 0.3 * measured
-        if _out[3]:
-            break
-        if _out[1] > 0 or depth == 1:
-            best = int(_out[1])
-            score = int(_out[0])
-        print(
-            f"depth {depth} score {score} nodes {_out[2]} "
-            f"time {_time.monotonic() - (deadline - budget):.2f}s pv {_to_uci(best)}"
-        )
-        if abs(score) > _fe.MATE_THRESHOLD:
-            break
-        if _time.monotonic() - (deadline - budget) > budget * 0.5:
-            break
-
-    if best <= 0:
-        raise RuntimeError("fast search produced no move")
-    text = _to_uci(best)
-    if _chess.Move.from_uci(text) not in board.legal_moves:
-        raise RuntimeError(f"fast search returned illegal move {text}")
-    return text
-
-
-# ------------------------------------------------------------------------
-# The original python-chess engine follows, unchanged, as the fallback.
-# ------------------------------------------------------------------------
-
 
 import time
 from collections.abc import Callable, Hashable
@@ -1280,8 +1095,8 @@ def _budget_seconds(board: chess.Board, time_left_ms: int) -> float:
     return max(0.005, budget / 1000.0)
 
 
-def _slow_move(fen: str, time_left_ms: int) -> str:
-    """The python-chess engine. Used only if the fast path is unavailable."""
+def get_move(fen: str, time_left_ms: int) -> str:
+    """Competition entry point. Returns a legal UCI move for `fen`."""
     board = chess.Board(fen)
 
     try:
@@ -1338,13 +1153,3 @@ def _warm_up() -> None:
 
 _warm_up()
 print("agent ready")
-
-
-def get_move(fen: str, time_left_ms: int) -> str:
-    """Competition entry point. Fast engine if it compiled, else the fallback."""
-    if FAST_READY:
-        try:
-            return _fast_move(fen, time_left_ms)
-        except Exception as exc:  # pragma: no cover - never lose on a crash
-            print(f"fast path failed ({type(exc).__name__}: {exc}); falling back")
-    return _slow_move(fen, time_left_ms)
